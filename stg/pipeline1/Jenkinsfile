@@ -1,0 +1,73 @@
+node {
+//    def cls = currentBuild.getPreviousBuild().getRawBuild().actions.find{ it instanceof ParametersAction }?.parameters.find{it.name == 'BRANCH_NAME'}?.value
+    properties ([
+        authorizationMatrix (
+            inheritanceStrategy: nonInheriting(),
+            permissions: [
+			'com.cloudbees.plugins.credentials.CredentialsProvider.Create:daniel',
+			'com.cloudbees.plugins.credentials.CredentialsProvider.Delete:daniel',
+			'com.cloudbees.plugins.credentials.CredentialsProvider.ManageDomains:daniel',
+			'com.cloudbees.plugins.credentials.CredentialsProvider.Update:daniel',
+			'com.cloudbees.plugins.credentials.CredentialsProvider.View:daniel',
+			'hudson.model.Item.Build:authenticated',
+			'hudson.model.Item.Build:daniel',
+			'hudson.model.Item.Cancel:daniel',
+			'hudson.model.Item.Configure:daniel',
+			'hudson.model.Item.Delete:daniel',
+			'hudson.model.Item.Discover:daniel',
+			'hudson.model.Item.Move:daniel',
+			'hudson.model.Item.Read:authenticated',
+			'hudson.model.Item.Read:daniel',
+			'hudson.model.Item.Workspace:daniel',
+			'hudson.model.Run.Delete:daniel',
+			'hudson.model.Run.Replay:daniel',
+			'hudson.model.Run.Update:daniel',
+			'hudson.scm.SCM.Tag:daniel'
+            ]
+        ),
+        disableConcurrentBuilds(),
+        [$class: 'GithubProjectProperty', displayName: '', projectUrlStr: 'https://github.com/ph2/ph2/'],
+        [$class: 'RebuildSettings', autoRebuild: false, rebuildDisabled: false],
+    ])
+    def remote = [:]
+    remote.name = "staging"
+    remote.host = "launch.phriendlyphishing.com"
+    remote.allowAnyHosts = true
+    stage('Clean up') {
+       cleanWs()
+    }
+    stage('SCM Checkout') {
+        checkout([
+            $class: 'GitSCM',
+            branches: [[name: 'develop']],
+            doGenerateSubmoduleConfigurations: false,
+            extensions: [],
+            gitTool: 'Default',
+            submoduleCfg: [],
+            userRemoteConfigs: [[
+                credentialsId: 'cbc6bd68-cafa-4de9-bd4c-f6896d4e527e',
+                name: 'origin',
+                url: 'git@github.com:phriendlyphishing/JenkinsInfra.git'
+            ]]
+        ])
+    }
+    stage('Deploy') {
+        sh '''
+            mina setup --verbose PH2_ENV=production --trace > `date +%b%d%G`.log
+            mina deploy --verbose PH2_ENV=production --trace >> `date +%b%d%G`.log
+            sed -i 's/\\x1b\\[[0-9;]*m//g' `date +%b%d%G`.log
+        '''
+        withCredentials([sshUserPrivateKey(credentialsId: 'a42ed417-4222-4c94-9971-69305827feed', keyFileVariable: 'sshKey', passphraseVariable: '', usernameVariable: 'sshUser')]) {
+            remote.user = sshUser
+            remote.identityFile = sshKey
+
+            sshRemove remote: remote, path: '/home/ubuntu/ph2_prod/current/config/initializers/datadog.rb'
+            sshCommand remote: remote, sudo: true, command: 'systemctl stop elasticsearch'
+        // sh '''
+        //     ssh -o StrictHostKeyChecking=no ubuntu@portal.phriendlyphishing.com "ssh ubuntu@prod-es "sudo systemctl restart elasticsearch""
+        //     ssh -o StrictHostKeyChecking=no ubuntu@portal.phriendlyphishing.com "ssh ubuntu@prod-es "sudo systemctl status elasticsearch""
+        // '''
+        }
+        archiveArtifacts artifacts: '*.log', fingerprint: true, followSymlinks: false
+    }
+}
